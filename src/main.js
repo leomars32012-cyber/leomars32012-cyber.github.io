@@ -80,18 +80,6 @@ function log(message, type = "log") {
   window.writeLog(message, type);
 }
 
-function watchR2(onPress) {
-  function onKey(event) {
-    if (event.key !== "F8" || event.code !== "Unidentified") return;
-    window.removeEventListener("keydown", onKey, true);
-    event.preventDefault();
-    onPress();
-  }
-
-  log("press R2 to load kstuff, shadowmountplus and etaHEN", "info");
-  window.addEventListener("keydown", onKey, true);
-}
-
 const ROP_WAIT_MS = 20000;
 
 function jbmark(tag, detail) {
@@ -281,14 +269,13 @@ async function main(userlandRW) {
   if (result.payloads) {
     log("kernel exploit complete", "info");
     log("elfldr is listening on port 9021", "info");
-    watchR2(async () => {
-      try {
-        const { loadOptionalPayloads } = await import("./kexp.js");
-        await loadOptionalPayloads(p, chain, (message) => log(message, "info"));
-      } catch (error) {
-        log(error instanceof Error ? error.message : String(error), "error");
-      }
-    });
+    // Load all autoloader code only after the kernel/bootstrap stage returns.
+    try {
+      const { loadAllPayloads } = await import("./autoload.js?v=2");
+      await loadAllPayloads(log);
+    } catch (error) {
+      log("ELF autoload failed: " + String(error && error.message || error), "error");
+    }
   } else {
     log("kernel chain complete: root and sandbox escape are active", "info");
   }
